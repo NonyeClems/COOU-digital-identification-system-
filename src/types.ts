@@ -15,12 +15,18 @@ export interface UserProfile {
 }
 
 export interface Student {
-  id: string; // The generated student identification number
+  id: string; // The generated student identification number / registration number
   docId: string; // Firestore document ID
   name: string;
   email: string;
+  phone?: string;
+  gender?: string;
+  dob?: string;
+  bloodGroup?: string;
+  religion?: string;
   department: string;
-  level: string; // e.g., '100L', '200L'
+  level: string; // Auto-calculated but stored for legacy records
+  admissionYear: number;
   passportURL: string;
   createdAt: number;
   updatedAt: number;

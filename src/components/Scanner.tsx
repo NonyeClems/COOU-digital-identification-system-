@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
 import { Student } from '../types';
-import { X, CheckCircle2, AlertTriangle, ShieldCheck, User, Building, Calendar, IdCard } from 'lucide-react';
+import { X, CheckCircle2, AlertTriangle, ShieldCheck, User, Building, Calendar, IdCard, Smartphone } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
 interface ScannerProps {
   onClose: () => void;
 }
+
+const getLocalStudents = (): Student[] => {
+  const data = localStorage.getItem('students');
+  return data ? JSON.parse(data) : [];
+};
 
 export function Scanner({ onClose }: ScannerProps) {
   const [verifying, setVerifying] = useState(false);
@@ -28,11 +31,15 @@ export function Scanner({ onClose }: ScannerProps) {
       try {
         scanner.clear();
         setVerifying(true);
-        const docRef = doc(db, 'students', decodedText);
-        const docSnap = await getDoc(docRef);
         
-        if (docSnap.exists()) {
-          setResult(docSnap.data() as Student);
+        // Simulate network delay
+        await new Promise(r => setTimeout(r, 800));
+
+        const students = getLocalStudents();
+        const student = students.find(s => s.docId === decodedText);
+        
+        if (student) {
+          setResult(student);
         } else {
           setError("Invalid QR Code. Student record not found.");
         }

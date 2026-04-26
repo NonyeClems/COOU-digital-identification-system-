@@ -1,17 +1,9 @@
-import { useEffect, useState } from 'react';
-import { 
-  collection, 
-  query, 
-  where, 
-  onSnapshot,
-  getDocs,
-  limit
-} from 'firebase/firestore';
-import { db } from '../firebase';
+import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../AuthContext';
 import { Student } from '../types';
 import { QRCodeSVG } from 'qrcode.react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
+import { toPng } from 'html-to-image';
 import { 
   Download, 
   Share2, 
@@ -21,15 +13,134 @@ import {
   CheckCircle2,
   MapPin,
   Calendar,
-  Building
+  Building,
+  UserPlus,
+  Camera,
+  LogOut,
+  Trash2
 } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, calculateLevel, compressImage, generateStudentId } from '../lib/utils';
+import { DEPARTMENTS } from '../constants';
+
+const getLocalStudents = (): Student[] => {
+  const data = localStorage.getItem('students');
+  return data ? JSON.parse(data) : [];
+};
+
+const saveLocalStudents = (students: Student[]) => {
+  localStorage.setItem('students', JSON.stringify(students));
+};
 
 export function StudentPortal() {
-  const { user, profile } = useAuth();
+  const idCardRef = useRef<HTMLDivElement>(null);
+  const { user, profile, logout } = useAuth();
   const [student, setStudent] = useState<Student | null>(null);
   const [loading, setLoading] = useState(true);
   const [offlineMode, setOfflineMode] = useState(false);
+  const [isEnrolling, setIsEnrolling] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  
+  const [enrollData, setEnrollData] = useState({
+    name: user?.displayName || '',
+    department: DEPARTMENTS[0],
+    admissionYear: 2025,
+    registrationNumber: '',
+    passportURL: '',
+    phone: '',
+    gender: 'Male',
+    dob: '',
+    bloodGroup: 'O+',
+    religion: 'Christianity'
+  });
+
+  const handleDownload = async () => {
+    if (!idCardRef.current) return;
+    try {
+      const dataUrl = await toPng(idCardRef.current, { cacheBust: true, pixelRatio: 2 });
+      const link = document.createElement('a');
+      link.download = `COOU-ID-${student?.id}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (error) {
+      console.error('Failed to generate image', error);
+      alert('Could not download image. Please try again.');
+    }
+  };
+
+  const handleShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'COOU Digital Identity',
+          text: `Verify my student identity. Name: ${student?.name}, Dept: ${student?.department}, RegNo: ${student?.id}`,
+        });
+      } catch (error: any) {
+        if (error.name !== 'AbortError') {
+          console.error('Error sharing', error);
+        }
+      }
+    } else {
+      alert("Sharing is not supported on this device/browser.");
+    }
+  };
+
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+
+  const handleDeleteRegistration = () => {
+    if (!user || !student) return;
+    if (isConfirmingDelete) {
+      const currentStudents = getLocalStudents();
+      const remain = currentStudents.filter(s => s.docId !== student.docId);
+      saveLocalStudents(remain);
+      localStorage.removeItem(`id_card_${user.uid}`);
+      setStudent(null);
+      setIsEnrolling(true);
+      setIsConfirmingDelete(false);
+    } else {
+      setIsConfirmingDelete(true);
+      setTimeout(() => setIsConfirmingDelete(false), 3000);
+    }
+  };
+
+  const handleEnrollment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.email || !enrollData.name || !enrollData.passportURL || !enrollData.registrationNumber) {
+       alert("Please complete all compulsory fields including Registration Number and upload a verified photograph.");
+       return;
+    }
+    const studentId = enrollData.registrationNumber;
+    try {
+      const currentStudents = getLocalStudents();
+      const newStudent: Student = {
+        name: enrollData.name,
+        email: user.email,
+        phone: enrollData.phone,
+        gender: enrollData.gender,
+        dob: enrollData.dob,
+        bloodGroup: enrollData.bloodGroup,
+        religion: enrollData.religion,
+        department: enrollData.department,
+        admissionYear: enrollData.admissionYear,
+        level: calculateLevel(enrollData.admissionYear),
+        passportURL: enrollData.passportURL,
+        id: studentId,
+        docId: Date.now().toString(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        status: 'active'
+      };
+      
+      currentStudents.unshift(newStudent);
+      saveLocalStudents(currentStudents);
+      
+      localStorage.setItem(`id_card_${user.uid}`, JSON.stringify(newStudent));
+      setStudent(newStudent);
+      setIsEnrolling(false);
+    } catch (error) {
+      console.error("Error self-enrolling", error);
+      alert("Failed to enroll. Contact administration.");
+    }
+  };
 
   useEffect(() => {
     if (!user?.email) return;
@@ -39,34 +150,17 @@ export function StudentPortal() {
     if (cached) {
       setStudent(JSON.parse(cached));
       setLoading(false);
-    }
-
-    const q = query(
-      collection(db, 'students'), 
-      where('email', '==', user.email),
-      limit(1)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      if (!snapshot.empty) {
-        const data = {
-          ...snapshot.docs[0].data(),
-          docId: snapshot.docs[0].id
-        } as Student;
-        setStudent(data);
-        localStorage.setItem(`id_card_${user.uid}`, JSON.stringify(data));
-        setOfflineMode(false);
+    } else {
+      const students = getLocalStudents();
+      const userStudent = students.find(s => s.email === user.email);
+      if (userStudent) {
+        setStudent(userStudent);
+        localStorage.setItem(`id_card_${user.uid}`, JSON.stringify(userStudent));
       } else {
         setStudent(null);
       }
       setLoading(false);
-    }, (error) => {
-      console.error("Firestore error:", error);
-      setOfflineMode(true);
-      setLoading(false);
-    });
-
-    return unsubscribe;
+    }
   }, [user]);
 
   if (loading && !student) {
@@ -79,6 +173,144 @@ export function StudentPortal() {
   }
 
   if (!student) {
+    if (isEnrolling) {
+      return (
+        <div className="max-w-2xl mx-auto bg-white rounded-3xl p-8 border border-slate-200 shadow-xl overflow-hidden relative">
+          <div className="absolute top-0 right-0 p-8">
+             <div className="bg-university-green/5 p-3 rounded-2xl rotate-6">
+                <UserPlus className="w-6 h-6 text-university-green" />
+             </div>
+          </div>
+          <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Identity Enrollment</h2>
+          <p className="text-slate-500 font-medium mt-1 mb-8">Complete your biometric registration to generate your Digital Student ID.</p>
+          
+          <form onSubmit={handleEnrollment} className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Full Legal Name</label>
+                <input required type="text" 
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                  value={enrollData.name} onChange={e => setEnrollData({...enrollData, name: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Faculty/Department</label>
+                <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                  value={enrollData.department} onChange={e => setEnrollData({...enrollData, department: e.target.value})}>
+                  {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Admission Year</label>
+                 <input type="number" required min="1990" max="2030"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                    value={enrollData.admissionYear} 
+                    onChange={e => setEnrollData({...enrollData, admissionYear: parseInt(e.target.value)})} />
+                 <p className="text-[9px] font-bold text-university-green uppercase tracking-wider mt-1 ml-1 opacity-80">
+                    Calculated Level: {calculateLevel(enrollData.admissionYear)}
+                 </p>
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Registration Number *</label>
+                 <input type="text" required
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800 uppercase"
+                    placeholder="Enter Registration Number"
+                    value={enrollData.registrationNumber} 
+                    onChange={e => setEnrollData({...enrollData, registrationNumber: e.target.value.toUpperCase()})} />
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Phone Number</label>
+                 <input type="tel"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                    placeholder="e.g. 08012345678"
+                    value={enrollData.phone} 
+                    onChange={e => setEnrollData({...enrollData, phone: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Date of Birth</label>
+                 <input type="date"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                    value={enrollData.dob} 
+                    onChange={e => setEnrollData({...enrollData, dob: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gender</label>
+                 <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                    value={enrollData.gender} onChange={e => setEnrollData({...enrollData, gender: e.target.value})}>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                 </select>
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Blood Group</label>
+                 <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                    value={enrollData.bloodGroup} onChange={e => setEnrollData({...enrollData, bloodGroup: e.target.value})}>
+                    {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(bg => <option key={bg} value={bg}>{bg}</option>)}
+                 </select>
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Religion</label>
+                 <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                    value={enrollData.religion} onChange={e => setEnrollData({...enrollData, religion: e.target.value})}>
+                    <option value="Christianity">Christianity</option>
+                    <option value="Islam">Islam</option>
+                    <option value="Other">Other</option>
+                 </select>
+              </div>
+
+              <div className="md:col-span-2 space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Official Passport Photograph</label>
+                <div className="flex flex-col sm:flex-row gap-4 sm:items-center">
+                   <label className="flex-1 cursor-pointer group">
+                     <div className="px-4 py-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl hover:border-university-green hover:bg-university-green/5 transition-all text-center flex items-center justify-center gap-2">
+                        {isUploading ? (
+                           <div className="w-4 h-4 border-2 border-university-green border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                           <Camera className="w-4 h-4 text-slate-400 group-hover:text-university-green" />
+                        )}
+                        <span className="text-xs font-bold text-slate-500 group-hover:text-university-green">
+                          {isUploading ? "Processing Image..." : enrollData.passportURL ? "Change Initialized Photograph" : "Upload Image Files (Auto-compressed)"}
+                        </span>
+                     </div>
+                     <input type="file" accept="image/*" className="hidden"
+                       onChange={async (e) => {
+                         const file = e.target.files?.[0];
+                         if (!file) return;
+                         setIsUploading(true);
+                         try {
+                           const base64 = await compressImage(file);
+                           setEnrollData({...enrollData, passportURL: base64});
+                         } catch(err) {
+                           alert("Failed to process image");
+                         } finally {
+                           setIsUploading(false);
+                         }
+                       }} />
+                   </label>
+                   <div className="w-16 h-16 rounded-xl border-2 border-slate-200 bg-slate-50 flex items-center justify-center shrink-0 overflow-hidden shadow-sm">
+                     {enrollData.passportURL ? (
+                       <img src={enrollData.passportURL} className="w-full h-full object-cover" />
+                     ) : (
+                       <UserPlus className="w-6 h-6 text-slate-300" />
+                     )}
+                   </div>
+                </div>
+              </div>
+            </div>
+            <div className="pt-6 flex gap-3">
+              <button type="button" onClick={() => setIsEnrolling(false)}
+                className="flex-1 px-8 py-4 rounded-xl border border-slate-200 font-bold text-slate-500 hover:bg-slate-50 transition-all uppercase text-xs tracking-widest">
+                Cancel
+              </button>
+              <button type="submit"
+                className="flex-1 px-8 py-4 rounded-xl bg-university-green text-white font-bold hover:bg-university-green/90 transition-all shadow-lg shadow-emerald-100 uppercase text-xs tracking-widest">
+                Submit Enrollment
+              </button>
+            </div>
+          </form>
+        </div>
+      );
+    }
+
     return (
       <div className="max-w-md mx-auto bg-white rounded-3xl p-8 border border-slate-200 text-center space-y-6 shadow-xl">
         <div className="w-20 h-20 bg-university-green/5 text-university-green rounded-full flex items-center justify-center mx-auto ring-8 ring-university-green/5">
@@ -93,13 +325,22 @@ export function StudentPortal() {
         <div className="bg-slate-50 p-4 rounded-xl text-xs text-slate-400 font-medium border border-slate-100">
            Contact the University Digital Services or Registrar to enroll your biometric data and secure your Digital Student ID.
         </div>
-        <button 
-          onClick={() => window.location.reload()}
-          className="flex items-center justify-center gap-2 w-full py-4 bg-university-green hover:bg-university-green/90 text-white rounded-xl font-black transition-all shadow-lg shadow-emerald-100 uppercase tracking-widest text-xs"
-        >
-          <RefreshCcw className="w-4 h-4 text-university-yellow" />
-          Retry Connection
-        </button>
+        <div className="flex flex-col gap-3">
+           <button 
+             onClick={() => setIsEnrolling(true)}
+             className="flex items-center justify-center gap-2 w-full py-4 bg-university-green hover:bg-university-green/90 text-white rounded-xl font-black transition-all shadow-lg shadow-emerald-100 uppercase tracking-widest text-xs"
+           >
+             <UserPlus className="w-4 h-4 text-university-yellow" />
+             Start Self-Enrollment
+           </button>
+           <button 
+             onClick={() => window.location.reload()}
+             className="flex items-center justify-center gap-2 w-full py-3 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl font-bold transition-all uppercase tracking-widest text-[10px]"
+           >
+             <RefreshCcw className="w-3 h-3" />
+             Retry Connection
+           </button>
+        </div>
       </div>
     );
   }
@@ -109,10 +350,10 @@ export function StudentPortal() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tight">Identity Portal</h2>
-          <p className="text-slate-500 flex items-center gap-1.5 font-bold text-xs uppercase tracking-widest">
+          <div className="text-slate-500 flex items-center gap-1.5 font-bold text-xs uppercase tracking-widest mt-1">
             {offlineMode ? <WifiOff className="w-3 h-3 text-amber-500" /> : <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />}
             {offlineMode ? "Offline (Accessing Local Cache)" : "Secure Live Connection"}
-          </p>
+          </div>
         </div>
         
         {student.status !== 'active' && (
@@ -125,6 +366,7 @@ export function StudentPortal() {
 
       {/* Digital ID Card */}
       <motion.div 
+        ref={idCardRef}
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         className={cn(
@@ -169,8 +411,8 @@ export function StudentPortal() {
                 <h3 className="text-4xl font-black text-slate-900 leading-[1.1] uppercase tracking-tighter">{student.name}</h3>
               </div>
 
-              <div className="grid grid-cols-1 gap-6">
-                <div className="flex items-center gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-y-6 gap-x-4">
+                <div className="flex items-center gap-4 col-span-1 md:col-span-2">
                   <div className="w-10 h-10 rounded-2xl bg-university-green/10 flex items-center justify-center shrink-0">
                     <Building className="w-5 h-5 text-university-green" />
                   </div>
@@ -179,6 +421,7 @@ export function StudentPortal() {
                     <p className="text-sm font-black text-slate-700 uppercase tracking-tight">{student.department}</p>
                   </div>
                 </div>
+
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-2xl bg-university-green/10 flex items-center justify-center shrink-0">
                     <Calendar className="w-5 h-5 text-university-green" />
@@ -186,6 +429,36 @@ export function StudentPortal() {
                   <div>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Academic Level</p>
                     <p className="text-sm font-black text-slate-700 uppercase tracking-tight">{student.level}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-2xl bg-university-green/10 flex items-center justify-center shrink-0">
+                    <div className="w-5 h-5 text-university-green font-black flex items-center justify-center">{student.bloodGroup || 'O+'}</div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Blood Group</p>
+                    <p className="text-sm font-black text-slate-700 uppercase tracking-tight">{student.bloodGroup || 'Not Specified'}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-2xl bg-university-green/10 flex items-center justify-center shrink-0">
+                    <div className="w-5 h-5 text-university-green font-black flex items-center justify-center text-xs">DOB</div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Date of Birth</p>
+                    <p className="text-sm font-black text-slate-700 uppercase tracking-tight">{student.dob ? new Date(student.dob).toLocaleDateString() : 'Not Specified'}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-2xl bg-university-green/10 flex items-center justify-center shrink-0">
+                    <Smartphone className="w-5 h-5 text-university-green" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Contact Line</p>
+                    <p className="text-sm font-black text-slate-700 uppercase tracking-tight">{student.phone || 'Not Specified'}</p>
                   </div>
                 </div>
               </div>
@@ -220,14 +493,22 @@ export function StudentPortal() {
       </motion.div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-2 gap-4">
-        <button className="flex items-center justify-center gap-3 p-5 bg-white hover:bg-slate-50 transition-all border border-slate-200 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-700 shadow-sm">
-          <Download className="w-5 h-5 text-university-green" />
-          Secure Download
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <button onClick={handleDownload} className="flex flex-col items-center justify-center gap-2 p-4 bg-white hover:bg-slate-50 transition-all border border-slate-200 rounded-2xl font-black text-[10px] uppercase tracking-widest text-slate-700 shadow-sm">
+          <Download className="w-5 h-5 text-university-green mb-1" />
+          Download
         </button>
-        <button className="flex items-center justify-center gap-3 p-5 bg-white hover:bg-slate-50 transition-all border border-slate-200 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-700 shadow-sm">
-          <Share2 className="w-5 h-5 text-university-green" />
-          Share Identity
+        <button onClick={handleShare} className="flex flex-col items-center justify-center gap-2 p-4 bg-white hover:bg-slate-50 transition-all border border-slate-200 rounded-2xl font-black text-[10px] uppercase tracking-widest text-slate-700 shadow-sm">
+          <Share2 className="w-5 h-5 text-university-green mb-1" />
+          Share
+        </button>
+        <button onClick={handleDeleteRegistration} className="flex flex-col items-center justify-center gap-2 p-4 bg-white hover:bg-red-50 transition-all border border-slate-200 hover:border-red-200 rounded-2xl font-black text-[10px] uppercase tracking-widest text-red-600 shadow-sm group">
+          <Trash2 className="w-5 h-5 text-red-500 mb-1 group-hover:scale-110 transition-transform" />
+          {isConfirmingDelete ? "Confirm" : "Delete"}
+        </button>
+        <button onClick={logout} className="flex flex-col items-center justify-center gap-2 p-4 bg-white hover:bg-slate-50 transition-all border border-slate-200 rounded-2xl font-black text-[10px] uppercase tracking-widest text-slate-700 shadow-sm group">
+          <LogOut className="w-5 h-5 text-slate-400 mb-1 group-hover:text-slate-700 transition-colors" />
+          Sign Out
         </button>
       </div>
     </div>

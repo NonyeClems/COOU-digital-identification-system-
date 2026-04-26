@@ -1,104 +1,131 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  collection, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  doc, 
-  deleteDoc, 
-  query, 
-  orderBy,
-  where,
-  getDocs
-} from 'firebase/firestore';
-import { db } from '../firebase';
 import { Student } from '../types';
-import { generateStudentId, cn, formatDate } from '../lib/utils';
-import { DEPARTMENTS, LEVELS } from '../constants';
+import { generateStudentId, cn, calculateLevel, compressImage } from '../lib/utils';
+import { DEPARTMENTS } from '../constants';
+import { useAuth } from '../AuthContext';
 import { 
-  Plus, 
   Search, 
   UserPlus, 
   Edit2, 
   Trash2, 
-  MoreVertical, 
   AlertCircle,
   CheckCircle2,
   XCircle,
-  Camera
+  Camera,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+const getLocalStudents = (): Student[] => {
+  const data = localStorage.getItem('students');
+  return data ? JSON.parse(data) : [];
+};
+
+const saveLocalStudents = (students: Student[]) => {
+  localStorage.setItem('students', JSON.stringify(students));
+};
+
 export function AdminDashboard() {
+  const { logout } = useAuth();
   const [students, setStudents] = useState<Student[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
     name: '',
     email: '',
+    registrationNumber: '',
     department: DEPARTMENTS[0],
-    level: LEVELS[0],
+    admissionYear: 2025,
+    level: calculateLevel(2025),
     passportURL: '',
-    status: 'active' as Student['status']
+    status: 'active' as Student['status'],
+    phone: '',
+    gender: 'Male',
+    dob: '',
+    bloodGroup: 'O+',
+    religion: 'Christianity'
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'students'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        docId: doc.id
-      })) as Student[];
-      setStudents(data);
-      setLoading(false);
-    });
-    return unsubscribe;
+    // Load from local storage on mount
+    setStudents(getLocalStudents());
+    setLoading(false);
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const currentStudents = [...students];
       if (editingStudent) {
-        const studentRef = doc(db, 'students', editingStudent.docId);
-        await updateDoc(studentRef, {
-          ...formData,
-          updatedAt: Date.now()
-        });
+        const index = currentStudents.findIndex(s => s.docId === editingStudent.docId);
+        if (index !== -1) {
+          currentStudents[index] = {
+            ...currentStudents[index],
+            ...formData,
+            id: formData.registrationNumber,
+            level: calculateLevel(formData.admissionYear),
+            updatedAt: Date.now()
+          };
+        }
       } else {
-        const studentId = generateStudentId(formData.department);
-        await addDoc(collection(db, 'students'), {
+        const studentId = formData.registrationNumber;
+        const newStudent: Student = {
           ...formData,
+          level: calculateLevel(formData.admissionYear),
           id: studentId,
+          docId: Date.now().toString(),
           createdAt: Date.now(),
           updatedAt: Date.now(),
-        });
+        };
+        currentStudents.unshift(newStudent);
       }
+      
+      setStudents(currentStudents);
+      saveLocalStudents(currentStudents);
+
       setIsModalOpen(false);
       setEditingStudent(null);
       setFormData({
         name: '',
         email: '',
+        registrationNumber: '',
         department: DEPARTMENTS[0],
-        level: LEVELS[0],
+        admissionYear: 2025,
+        level: calculateLevel(2025),
         passportURL: '',
-        status: 'active'
+        status: 'active',
+        phone: '',
+        gender: 'Male',
+        dob: '',
+        bloodGroup: 'O+',
+        religion: 'Christianity'
       });
     } catch (error) {
       console.error("Error saving student:", error);
     }
   };
 
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   const handleDelete = async (docId: string) => {
-    if (confirm("Are you sure you want to delete this student record?")) {
+    if (deletingId === docId) {
       try {
-        await deleteDoc(doc(db, 'students', docId));
+        const updatedStudents = students.filter(s => s.docId !== docId);
+        setStudents(updatedStudents);
+        saveLocalStudents(updatedStudents);
+        setDeletingId(null);
       } catch (error) {
         console.error("Error deleting student:", error);
       }
+    } else {
+      setDeletingId(docId);
+      // Auto-reset confirmation after 3 seconds
+      setTimeout(() => setDeletingId(null), 3000);
     }
   };
 
@@ -107,10 +134,17 @@ export function AdminDashboard() {
     setFormData({
       name: student.name,
       email: student.email,
+      registrationNumber: student.id,
       department: student.department,
+      admissionYear: student.admissionYear || 2025,
       level: student.level,
       passportURL: student.passportURL,
-      status: student.status
+      status: student.status,
+      phone: student.phone || '',
+      gender: student.gender || 'Male',
+      dob: student.dob || '',
+      bloodGroup: student.bloodGroup || 'O+',
+      religion: student.religion || 'Christianity'
     });
     setIsModalOpen(true);
   };
@@ -128,24 +162,41 @@ export function AdminDashboard() {
           <h2 className="text-2xl font-black text-university-green uppercase tracking-tight">University Registry</h2>
           <p className="text-slate-500 text-sm font-medium">Manage student identification records and digital ID status.</p>
         </div>
-        <button
-          onClick={() => {
-            setEditingStudent(null);
-            setFormData({
-              name: '',
-              email: '',
-              department: DEPARTMENTS[0],
-              level: LEVELS[0],
-              passportURL: '',
-              status: 'active'
-            });
-            setIsModalOpen(true);
-          }}
-          className="bg-university-green hover:bg-university-green/90 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-100"
-        >
-          <UserPlus className="w-5 h-5 text-university-yellow" />
-          Enroll New Student
-        </button>
+        <div className="flex gap-3">
+          <button
+            onClick={() => {
+              setEditingStudent(null);
+              setFormData({
+                name: '',
+                email: '',
+                registrationNumber: '',
+                department: DEPARTMENTS[0],
+                admissionYear: 2025,
+                level: calculateLevel(2025),
+                passportURL: '',
+                status: 'active',
+                phone: '',
+                gender: 'Male',
+                dob: '',
+                bloodGroup: 'O+',
+                religion: 'Christianity'
+              });
+              setIsModalOpen(true);
+            }}
+            className="bg-university-green hover:bg-university-green/90 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-100"
+          >
+            <UserPlus className="w-5 h-5 text-university-yellow" />
+            Enroll New Student
+          </button>
+          
+          <button
+            onClick={logout}
+            className="bg-red-50 hover:bg-red-100 text-red-600 px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
+          >
+            <LogOut className="w-5 h-5" />
+            Sign Out
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -221,20 +272,25 @@ export function AdminDashboard() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center justify-end gap-1">
                         <button 
                           onClick={() => openEdit(student)}
-                          className="p-2 text-slate-400 hover:text-university-green hover:bg-white transition-all rounded-lg shadow-xs"
+                          className="p-2 text-slate-400 hover:text-university-green hover:bg-slate-50 transition-all rounded-lg"
                           title="Edit Record"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button 
                           onClick={() => handleDelete(student.docId)}
-                          className="p-2 text-slate-400 hover:text-red-500 hover:bg-white transition-all rounded-lg shadow-xs"
+                          className={cn(
+                            "p-2 transition-all rounded-lg",
+                            deletingId === student.docId 
+                              ? "text-white bg-red-500 hover:bg-red-600 font-bold px-3 text-xs" 
+                              : "text-slate-400 hover:text-red-500 hover:bg-red-50"
+                          )}
                           title="Delete Record"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {deletingId === student.docId ? 'Confirm' : <Trash2 className="w-4 h-4" />}
                         </button>
                       </div>
                     </td>
@@ -312,31 +368,114 @@ export function AdminDashboard() {
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Academic Progression</label>
-                    <select
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Admission Year</label>
+                    <input
+                      type="number"
+                      required
+                      min="1990"
+                      max="2030"
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
-                      value={formData.level}
-                      onChange={e => setFormData({...formData, level: e.target.value})}
-                    >
-                      {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-                    </select>
+                      value={formData.admissionYear}
+                      onChange={e => {
+                        const year = parseInt(e.target.value);
+                        setFormData({
+                          ...formData, 
+                          admissionYear: year,
+                          level: calculateLevel(year)
+                        })
+                      }}
+                    />
+                    <p className="text-[9px] font-bold text-university-green uppercase tracking-wider mt-1 ml-1 opacity-80">
+                      Calculated Level: {formData.level}
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Registration Number *</label>
+                     <input
+                        type="text" required
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800 uppercase"
+                        placeholder="Enter Registration Number"
+                        value={formData.registrationNumber}
+                        onChange={e => setFormData({...formData, registrationNumber: e.target.value.toUpperCase()})}
+                     />
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Phone Number</label>
+                     <input type="tel"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                        placeholder="e.g. 08012345678"
+                        value={formData.phone} 
+                        onChange={e => setFormData({...formData, phone: e.target.value})} />
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Date of Birth</label>
+                     <input type="date"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                        value={formData.dob} 
+                        onChange={e => setFormData({...formData, dob: e.target.value})} />
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gender</label>
+                     <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                        value={formData.gender} onChange={e => setFormData({...formData, gender: e.target.value})}>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                     </select>
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Blood Group</label>
+                     <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                        value={formData.bloodGroup} onChange={e => setFormData({...formData, bloodGroup: e.target.value})}>
+                        {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(bg => <option key={bg} value={bg}>{bg}</option>)}
+                     </select>
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Religion</label>
+                     <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
+                        value={formData.religion} onChange={e => setFormData({...formData, religion: e.target.value})}>
+                        <option value="Christianity">Christianity</option>
+                        <option value="Islam">Islam</option>
+                        <option value="Other">Other</option>
+                     </select>
                   </div>
                   <div className="md:col-span-2 space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Verified Passport Photograph (URL)</label>
-                    <div className="flex gap-4">
-                       <input
-                        required
-                        type="url"
-                        className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-mono text-xs"
-                        value={formData.passportURL}
-                        onChange={e => setFormData({...formData, passportURL: e.target.value})}
-                        placeholder="Link to secure image file"
-                      />
-                      <div className="w-12 h-12 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 flex items-center justify-center shrink-0 overflow-hidden">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Verified Passport Photograph</label>
+                    <div className="flex flex-col sm:flex-row gap-4 sm:items-center">
+                       <label className="flex-1 cursor-pointer group">
+                         <div className="px-4 py-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl hover:border-university-green hover:bg-university-green/5 transition-all text-center flex items-center justify-center gap-2">
+                            {isUploading ? (
+                               <div className="w-4 h-4 border-2 border-university-green border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                               <Camera className="w-4 h-4 text-slate-400 group-hover:text-university-green" />
+                            )}
+                            <span className="text-xs font-bold text-slate-500 group-hover:text-university-green">
+                              {isUploading ? "Processing Image..." : formData.passportURL ? "Change Initialized Photograph" : "Upload Image Files (Auto-compressed)"}
+                            </span>
+                         </div>
+                         <input
+                           type="file"
+                           accept="image/*"
+                           className="hidden"
+                           onChange={async (e) => {
+                             const file = e.target.files?.[0];
+                             if (!file) return;
+                             setIsUploading(true);
+                             try {
+                               const base64 = await compressImage(file);
+                               setFormData({...formData, passportURL: base64});
+                             } catch(err) {
+                               alert("Failed to process image");
+                             } finally {
+                               setIsUploading(false);
+                             }
+                           }}
+                         />
+                       </label>
+                      <div className="w-16 h-16 rounded-xl border-2 border-slate-200 bg-slate-50 flex items-center justify-center shrink-0 overflow-hidden shadow-sm">
                         {formData.passportURL ? (
                           <img src={formData.passportURL} className="w-full h-full object-cover" />
                         ) : (
-                          <Camera className="w-5 h-5 text-slate-300" />
+                          <UserPlus className="w-6 h-6 text-slate-300" />
                         )}
                       </div>
                     </div>

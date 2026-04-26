@@ -11,6 +11,22 @@ import { UNIVERSITY_NAME, APP_NAME } from './constants';
 function AppContent() {
   const { user, profile, loading, login } = useAuth();
   const [view, setView] = useState<'dashboard' | 'scanner'>('dashboard');
+  const [loginError, setLoginError] = useState<string>('');
+  const [email, setEmail] = useState('');
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) {
+      setLoginError('Please enter your COOU email.');
+      return;
+    }
+    try {
+      setLoginError('');
+      await login(email);
+    } catch (err: any) {
+      setLoginError(err.message || 'An error occurred during login.');
+    }
+  };
 
   if (loading) {
     return (
@@ -42,13 +58,31 @@ function AppContent() {
           <p className="text-slate-600 text-sm">
             Access your secure digital ID card or manage university identification records.
           </p>
-          <button
-            onClick={login}
-            className="w-full flex items-center justify-center gap-2 bg-university-green hover:bg-university-green/90 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-100"
-          >
-            <LogIn className="w-5 h-5" />
-            Login with COOU Portal Account
-          </button>
+          
+          <form onSubmit={handleLogin} className="space-y-4">
+            {loginError && (
+              <div className="bg-red-50 text-red-600 p-3 rounded-lg text-xs font-bold border border-red-100">
+                {loginError}
+              </div>
+            )}
+            
+            <input
+              type="email"
+              placeholder="Enter COOU email address..."
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-university-green focus:border-transparent"
+              required
+            />
+
+            <button
+              type="submit"
+              className="w-full flex items-center justify-center gap-2 bg-university-green hover:bg-university-green/90 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-100"
+            >
+              <LogIn className="w-5 h-5" />
+              Login / Register with COOU Account
+            </button>
+          </form>
           
           <div className="pt-6 border-t border-slate-100">
             <button 

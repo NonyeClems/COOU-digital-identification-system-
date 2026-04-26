@@ -1,31 +1,24 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut,
-  User
-} from 'firebase/auth';
-import { 
-  doc, 
-  getDoc, 
-  setDoc,
-  serverTimestamp
-} from 'firebase/firestore';
-import { auth, db } from './firebase';
 import { UserProfile, UserRole } from './types';
+
+// Dummy User type to replace Firebase User
+export interface User {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+}
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
-  login: () => Promise<void>;
+  login: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// List of admin emails (for initial rollout)
 const INITIAL_ADMINS = ['nonyeasuzu3@gmail.com'];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -34,43 +27,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    return onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      if (user) {
-        const profileRef = doc(db, 'users', user.uid);
-        const profileSnap = await getDoc(profileRef);
-
-        if (profileSnap.exists()) {
-          setProfile(profileSnap.data() as UserProfile);
-        } else {
-          // Determine initial role
-          const role: UserRole = INITIAL_ADMINS.includes(user.email || '') ? 'admin' : 'student';
-          
-          const newProfile: UserProfile = {
-            uid: user.uid,
-            email: user.email || '',
-            displayName: user.displayName || 'Anonymous User',
-            photoURL: user.photoURL || undefined,
-            role: role,
-          };
-          
-          await setDoc(profileRef, newProfile);
-          setProfile(newProfile);
-        }
-      } else {
-        setProfile(null);
-      }
+    // Check local storage for existing session
+    const storedUser = localStorage.getItem('appUser');
+    if (storedUser) {
+      const parsedUser = JSON.parse(storedUser) as User;
+      setUser(parsedUser);
+      loadProfile(parsedUser);
+    } else {
       setLoading(false);
-    });
+    }
   }, []);
 
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+  const loadProfile = (currentUser: User) => {
+    const profilesJson = localStorage.getItem('userProfiles');
+    const profiles = profilesJson ? JSON.parse(profilesJson) : {};
+    
+    if (profiles[currentUser.uid]) {
+      setProfile(profiles[currentUser.uid]);
+    } else {
+      const role: UserRole = INITIAL_ADMINS.includes(currentUser.email || '') ? 'admin' : 'student';
+      const newProfile: UserProfile = {
+        uid: currentUser.uid,
+        email: currentUser.email || '',
+        displayName: currentUser.displayName || 'Anonymous User',
+        photoURL: currentUser.photoURL || undefined,
+        role: role,
+      };
+      
+      profiles[currentUser.uid] = newProfile;
+      localStorage.setItem('userProfiles', JSON.stringify(profiles));
+      setProfile(newProfile);
+    }
+    setLoading(false);
+  };
+
+  const login = async (email: string) => {
+    if (!email) return;
+
+    const dummyUser: User = {
+      uid: email,
+      email: email,
+      displayName: email.split('@')[0],
+      photoURL: null,
+    };
+
+    localStorage.setItem('appUser', JSON.stringify(dummyUser));
+    setUser(dummyUser);
+    loadProfile(dummyUser);
   };
 
   const logout = async () => {
-    await signOut(auth);
+    localStorage.removeItem('appUser');
+    setUser(null);
+    setProfile(null);
   };
 
   return (
