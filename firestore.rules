@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         // bootstrapping condition for initial admins since we don't have a reliable way to pre-populate admins table usually, but we check if role is admin. Wait, the user document is created by the frontend on login.
+         (request.auth.token.email == 'nonyeasuzu3@gmail.com' && request.auth.token.email_verified == true)); // hardcoded admin for safety!
+    }
+
+    // ----- USER PROFILES -----
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role'])
+        && data.uid is string && data.uid.size() <= 128
+        && data.email is string && data.email.size() <= 256
+        && data.role in ['admin', 'student', 'staff']
+        && data.uid == request.auth.uid; // Must be themselves
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      
+      allow create: if isSignedIn() 
+        && request.auth.uid == userId 
+        && isValidUser(incoming())
+        // Prevent users from granting themselves admin unless they are the hardcoded admin
+        && (incoming().role == 'student' || (request.auth.token.email == 'nonyeasuzu3@gmail.com' && request.auth.token.email_verified == true && incoming().role == 'admin'));
+      
+      allow update: if isSignedIn() 
+        && request.auth.uid == userId 
+        && isValidUser(incoming())
+        && (
+           incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL']) ||
+           isAdmin() // Admins can change roles
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ----- STUDENT RECORDS -----
+    function isValidStudent(data) {
+      return data.keys().hasAll(['id', 'docId', 'name', 'email', 'department', 'admissionYear', 'level', 'createdAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.docId is string && data.docId.size() <= 128
+        && data.name is string && data.name.size() <= 256
+        && data.email is string && data.email.size() <= 256
+        && data.department is string && data.department.size() <= 128
+        && data.admissionYear is number
+        && data.level is string && data.level.size() <= 128
+        && data.createdAt is number;
+        // Optionally validate other fields if they are present, but diff().affectedKeys() manages updates
+    }
+
+    match /students/{studentId} {
+      // Allow PUBLIC READ for GET (verification by anyone, anywhere)
+      allow get: if true; 
+      
+      // Allow LIST only for admins, or the student themselves
+      allow list: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+
+      allow create: if isSignedIn() 
+        && isValidStudent(incoming())
+        && (isAdmin() || incoming().userId == request.auth.uid);
+      
+      allow update: if (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid))
+        && isValidStudent(incoming());
+
+      allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+    }
+  }
+}

@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { Student } from '../types';
-import { X, CheckCircle2, AlertTriangle, ShieldCheck, User, Building, Calendar, IdCard, Smartphone } from 'lucide-react';
+import { db } from '../firebase';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { X, CheckCircle2, AlertTriangle, ShieldCheck, User, Building, Calendar, IdCard, Smartphone, RefreshCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
 interface ScannerProps {
   onClose: () => void;
 }
-
-const getLocalStudents = (): Student[] => {
-  const data = localStorage.getItem('students');
-  return data ? JSON.parse(data) : [];
-};
 
 export function Scanner({ onClose }: ScannerProps) {
   const [verifying, setVerifying] = useState(false);
@@ -27,21 +24,39 @@ export function Scanner({ onClose }: ScannerProps) {
     );
 
     const onScanSuccess = async (decodedText: string) => {
-      // Assuming decodedText is the studentDocId
+      // Handle both raw IDs and full verification URLs
+      let studentDocId = decodedText;
+      if (decodedText.includes('/verify/')) {
+        const parts = decodedText.split('/verify/');
+        studentDocId = parts[parts.length - 1];
+      }
+
       try {
         scanner.clear();
         setVerifying(true);
+        setError(null);
         
-        // Simulate network delay
-        await new Promise(r => setTimeout(r, 800));
-
-        const students = getLocalStudents();
-        const student = students.find(s => s.docId === decodedText);
+        let foundStudent: Student | null = null;
         
-        if (student) {
-          setResult(student);
+        // Try direct docId first
+        const docRef = doc(db, 'students', studentDocId);
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+          foundStudent = { ...docSnap.data(), docId: docSnap.id } as Student;
         } else {
-          setError("Invalid QR Code. Student record not found.");
+          // If not found, try by registration ID `id`
+          const q = query(collection(db, 'students'), where('id', '==', studentDocId));
+          const querySnap = await getDocs(q);
+          if (!querySnap.empty) {
+            foundStudent = { ...querySnap.docs[0].data(), docId: querySnap.docs[0].id } as Student;
+          }
+        }
+        
+        if (foundStudent) {
+          setResult(foundStudent);
+        } else {
+          setError("Invalid QR Code. Student record not found in registry.");
         }
       } catch (err) {
         console.error("Verification error:", err);

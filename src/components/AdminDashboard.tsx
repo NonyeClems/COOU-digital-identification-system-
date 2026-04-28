@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Student } from '../types';
 import { generateStudentId, cn, calculateLevel, compressImage } from '../lib/utils';
 import { DEPARTMENTS } from '../constants';
-import { useAuth } from '../AuthContext';
+import { useAuth, handleFirestoreError, OperationType } from '../AuthContext';
 import { 
   Search, 
   UserPlus, 
@@ -15,15 +15,8 @@ import {
   LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-
-const getLocalStudents = (): Student[] => {
-  const data = localStorage.getItem('students');
-  return data ? JSON.parse(data) : [];
-};
-
-const saveLocalStudents = (students: Student[]) => {
-  localStorage.setItem('students', JSON.stringify(students));
-};
+import { db } from '../firebase';
+import { collection, doc, getDocs, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 export function AdminDashboard() {
   const { logout } = useAuth();
@@ -52,41 +45,57 @@ export function AdminDashboard() {
   });
 
   useEffect(() => {
-    // Load from local storage on mount
-    setStudents(getLocalStudents());
-    setLoading(false);
+    fetchStudents();
   }, []);
+
+  const fetchStudents = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'students'));
+      const studentData: Student[] = [];
+      snap.forEach(doc => studentData.push({ ...doc.data(), docId: doc.id } as Student));
+      setStudents(studentData);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, 'students');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const currentStudents = [...students];
+      let currentStudents = [...students];
       if (editingStudent) {
+        const studentRef = doc(db, 'students', editingStudent.docId!);
         const index = currentStudents.findIndex(s => s.docId === editingStudent.docId);
+        const updatedData = {
+          ...currentStudents[index],
+          ...formData,
+          id: formData.registrationNumber,
+          level: calculateLevel(formData.admissionYear),
+          updatedAt: Date.now()
+        };
+        await updateDoc(studentRef, updatedData);
+
         if (index !== -1) {
-          currentStudents[index] = {
-            ...currentStudents[index],
-            ...formData,
-            id: formData.registrationNumber,
-            level: calculateLevel(formData.admissionYear),
-            updatedAt: Date.now()
-          };
+          currentStudents[index] = updatedData;
         }
       } else {
         const studentId = formData.registrationNumber;
+        const docId = Date.now().toString();
         const newStudent: Student = {
           ...formData,
           level: calculateLevel(formData.admissionYear),
           id: studentId,
-          docId: Date.now().toString(),
+          docId: docId,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
+        await setDoc(doc(db, 'students', docId), newStudent);
         currentStudents.unshift(newStudent);
       }
       
       setStudents(currentStudents);
-      saveLocalStudents(currentStudents);
 
       setIsModalOpen(false);
       setEditingStudent(null);
@@ -106,7 +115,11 @@ export function AdminDashboard() {
         religion: 'Christianity'
       });
     } catch (error) {
-      console.error("Error saving student:", error);
+      if (editingStudent) {
+        handleFirestoreError(error, OperationType.UPDATE, `students/${editingStudent.docId}`);
+      } else {
+        handleFirestoreError(error, OperationType.CREATE, 'students');
+      }
     }
   };
 
@@ -115,12 +128,11 @@ export function AdminDashboard() {
   const handleDelete = async (docId: string) => {
     if (deletingId === docId) {
       try {
-        const updatedStudents = students.filter(s => s.docId !== docId);
-        setStudents(updatedStudents);
-        saveLocalStudents(updatedStudents);
+        await deleteDoc(doc(db, 'students', docId));
+        setStudents(students.filter(s => s.docId !== docId));
         setDeletingId(null);
       } catch (error) {
-        console.error("Error deleting student:", error);
+        handleFirestoreError(error, OperationType.DELETE, `students/${docId}`);
       }
     } else {
       setDeletingId(docId);
@@ -375,9 +387,9 @@ export function AdminDashboard() {
                       min="1990"
                       max="2030"
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
-                      value={formData.admissionYear}
+                      value={formData.admissionYear || ''}
                       onChange={e => {
-                        const year = parseInt(e.target.value);
+                        const year = parseInt(e.target.value) || 0;
                         setFormData({
                           ...formData, 
                           admissionYear: year,

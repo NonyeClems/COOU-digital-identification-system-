@@ -1,28 +1,26 @@
 import { useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
 import { AdminDashboard } from './components/AdminDashboard';
 import { StudentPortal } from './components/StudentPortal';
 import { Scanner } from './components/Scanner';
 import { Navbar } from './components/Navbar';
+import { VerificationPortal } from './components/VerificationPortal';
 import { motion, AnimatePresence } from 'motion/react';
 import { IdCard, QrCode, LogIn } from 'lucide-react';
 import { UNIVERSITY_NAME, APP_NAME } from './constants';
 
 function AppContent() {
   const { user, profile, loading, login } = useAuth();
-  const [view, setView] = useState<'dashboard' | 'scanner'>('dashboard');
   const [loginError, setLoginError] = useState<string>('');
   const [email, setEmail] = useState('');
+  const location = useLocation();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) {
-      setLoginError('Please enter your COOU email.');
-      return;
-    }
     try {
       setLoginError('');
-      await login(email);
+      await login();
     } catch (err: any) {
       setLoginError(err.message || 'An error occurred during login.');
     }
@@ -40,7 +38,8 @@ function AppContent() {
     );
   }
 
-  if (!user) {
+  // Allow public verification routes even if not logged in
+  if (!user && !location.pathname.startsWith('/verify')) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
         <motion.div 
@@ -66,15 +65,6 @@ function AppContent() {
               </div>
             )}
             
-            <input
-              type="email"
-              placeholder="Enter COOU email address..."
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-university-green focus:border-transparent"
-              required
-            />
-
             <button
               type="submit"
               className="w-full flex items-center justify-center gap-2 bg-university-green hover:bg-university-green/90 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-100"
@@ -85,58 +75,30 @@ function AppContent() {
           </form>
           
           <div className="pt-6 border-t border-slate-100">
-            <button 
-              onClick={() => setView('scanner')}
-              className="text-sm font-bold text-university-green hover:text-university-green/80 flex items-center justify-center gap-2 mx-auto"
-            >
-              <QrCode className="w-5 h-5 text-university-yellow" />
-              Verify Student Identity
-            </button>
+            <NavigateToScanner />
           </div>
         </motion.div>
-
-        {view === 'scanner' && (
-          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl">
-              <Scanner onClose={() => setView('dashboard')} />
-            </div>
-          </div>
-        )}
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <Navbar setView={setView} currentView={view} />
+      {user && <Navbar />}
       
       <main className="container mx-auto px-4 py-8 max-w-7xl">
-        <AnimatePresence mode="wait">
-          {view === 'dashboard' ? (
-            <motion.div
-              key="dashboard"
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 10 }}
-            >
-              {profile?.role === 'admin' || profile?.role === 'staff' ? (
-                <AdminDashboard />
-              ) : (
-                <StudentPortal />
-              )}
-            </motion.div>
-          ) : (
-            <motion.div
-              key="scanner"
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
-              className="max-w-xl mx-auto"
-            >
-              <Scanner onClose={() => setView('dashboard')} />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <Routes>
+          <Route path="/" element={
+            profile?.role === 'admin' || profile?.role === 'staff' ? (
+              <AdminDashboard />
+            ) : (
+              <StudentPortal />
+            )
+          } />
+          <Route path="/scanner" element={<Scanner onClose={() => {}} />} />
+          <Route path="/verify/:studentId" element={<VerificationPortal />} />
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
       </main>
 
       <footer className="py-12 text-center space-y-2">
@@ -149,10 +111,26 @@ function AppContent() {
   );
 }
 
-export default function App() {
+function NavigateToScanner() {
+  const navigate = useNavigate();
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <button 
+      onClick={() => navigate('/scanner')}
+      className="text-sm font-bold text-university-green hover:text-university-green/80 flex items-center justify-center gap-2 mx-auto cursor-pointer"
+    >
+       <QrCode className="w-5 h-5 text-university-yellow" />
+       Verify Student Identity
+    </button>
   );
 }
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}
+

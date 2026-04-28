@@ -31,6 +31,7 @@ export interface Student {
   createdAt: number;
   updatedAt: number;
   status: 'active' | 'suspended' | 'graduated';
+  userId?: string;
 }
 
 export interface FirestoreErrorInfo {

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useAuth } from '../AuthContext';
+import { useAuth, handleFirestoreError, OperationType } from '../AuthContext';
 import { Student } from '../types';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -11,6 +11,7 @@ import {
   WifiOff, 
   RefreshCcw, 
   CheckCircle2,
+  AlertCircle,
   MapPin,
   Calendar,
   Building,
@@ -21,15 +22,8 @@ import {
 } from 'lucide-react';
 import { cn, calculateLevel, compressImage, generateStudentId } from '../lib/utils';
 import { DEPARTMENTS } from '../constants';
-
-const getLocalStudents = (): Student[] => {
-  const data = localStorage.getItem('students');
-  return data ? JSON.parse(data) : [];
-};
-
-const saveLocalStudents = (students: Student[]) => {
-  localStorage.setItem('students', JSON.stringify(students));
-};
+import { db } from '../firebase';
+import { collection, query, where, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 export function StudentPortal() {
   const idCardRef = useRef<HTMLDivElement>(null);
@@ -52,6 +46,41 @@ export function StudentPortal() {
     bloodGroup: 'O+',
     religion: 'Christianity'
   });
+
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    fetchStudentRecord();
+  }, [user]);
+
+  const fetchStudentRecord = async () => {
+    setLoading(true);
+    try {
+      const q = query(collection(db, 'students'), where('userId', '==', user?.uid));
+      const snap = await getDocs(q);
+      
+      if (!snap.empty) {
+        const studentData = { ...snap.docs[0].data(), docId: snap.docs[0].id } as Student;
+        setStudent(studentData);
+        localStorage.setItem(`id_card_${user?.uid}`, JSON.stringify(studentData));
+        setOfflineMode(false);
+      } else {
+        setStudent(null);
+      }
+    } catch (error) {
+       // fallback to local storage if offline
+       const cached = localStorage.getItem(`id_card_${user?.uid}`);
+       if (cached) {
+         setStudent(JSON.parse(cached));
+         setOfflineMode(true);
+       } else {
+         handleFirestoreError(error, OperationType.GET, 'students');
+       }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleDownload = async () => {
     if (!idCardRef.current) return;
@@ -84,18 +113,18 @@ export function StudentPortal() {
     }
   };
 
-  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
-
-  const handleDeleteRegistration = () => {
+  const handleDeleteRegistration = async () => {
     if (!user || !student) return;
     if (isConfirmingDelete) {
-      const currentStudents = getLocalStudents();
-      const remain = currentStudents.filter(s => s.docId !== student.docId);
-      saveLocalStudents(remain);
-      localStorage.removeItem(`id_card_${user.uid}`);
-      setStudent(null);
-      setIsEnrolling(true);
-      setIsConfirmingDelete(false);
+      try {
+        await deleteDoc(doc(db, 'students', student.docId!));
+        localStorage.removeItem(`id_card_${user.uid}`);
+        setStudent(null);
+        setIsEnrolling(true);
+        setIsConfirmingDelete(false);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `students/${student.docId}`);
+      }
     } else {
       setIsConfirmingDelete(true);
       setTimeout(() => setIsConfirmingDelete(false), 3000);
@@ -104,13 +133,13 @@ export function StudentPortal() {
 
   const handleEnrollment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user?.email || !enrollData.name || !enrollData.passportURL || !enrollData.registrationNumber) {
+    if (!user || !user?.email || !enrollData.name || !enrollData.passportURL || !enrollData.registrationNumber) {
        alert("Please complete all compulsory fields including Registration Number and upload a verified photograph.");
        return;
     }
     const studentId = enrollData.registrationNumber;
     try {
-      const currentStudents = getLocalStudents();
+      const docId = Date.now().toString();
       const newStudent: Student = {
         name: enrollData.name,
         email: user.email,
@@ -124,44 +153,22 @@ export function StudentPortal() {
         level: calculateLevel(enrollData.admissionYear),
         passportURL: enrollData.passportURL,
         id: studentId,
-        docId: Date.now().toString(),
+        docId: docId,
+        userId: user.uid,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         status: 'active'
       };
       
-      currentStudents.unshift(newStudent);
-      saveLocalStudents(currentStudents);
+      await setDoc(doc(db, 'students', docId), newStudent);
       
       localStorage.setItem(`id_card_${user.uid}`, JSON.stringify(newStudent));
       setStudent(newStudent);
       setIsEnrolling(false);
     } catch (error) {
-      console.error("Error self-enrolling", error);
-      alert("Failed to enroll. Contact administration.");
+      handleFirestoreError(error, OperationType.CREATE, 'students');
     }
   };
-
-  useEffect(() => {
-    if (!user?.email) return;
-
-    // First try local storage for offline support
-    const cached = localStorage.getItem(`id_card_${user.uid}`);
-    if (cached) {
-      setStudent(JSON.parse(cached));
-      setLoading(false);
-    } else {
-      const students = getLocalStudents();
-      const userStudent = students.find(s => s.email === user.email);
-      if (userStudent) {
-        setStudent(userStudent);
-        localStorage.setItem(`id_card_${user.uid}`, JSON.stringify(userStudent));
-      } else {
-        setStudent(null);
-      }
-      setLoading(false);
-    }
-  }, [user]);
 
   if (loading && !student) {
     return (
@@ -203,8 +210,8 @@ export function StudentPortal() {
                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Admission Year</label>
                  <input type="number" required min="1990" max="2030"
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-university-green focus:bg-white transition-all font-bold text-slate-800"
-                    value={enrollData.admissionYear} 
-                    onChange={e => setEnrollData({...enrollData, admissionYear: parseInt(e.target.value)})} />
+                    value={enrollData.admissionYear || ''} 
+                    onChange={e => setEnrollData({...enrollData, admissionYear: parseInt(e.target.value) || 0})} />
                  <p className="text-[9px] font-bold text-university-green uppercase tracking-wider mt-1 ml-1 opacity-80">
                     Calculated Level: {calculateLevel(enrollData.admissionYear)}
                  </p>
@@ -478,7 +485,7 @@ export function StudentPortal() {
               <div className="bg-white p-3 border-2 border-university-green/10 rounded-3xl shadow-inner relative group">
                 <div className="absolute inset-0 bg-university-yellow/5 opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl" />
                 <QRCodeSVG 
-                  value={student.docId} 
+                  value={`${window.location.origin}/verify/${student.docId}`} 
                   size={110} 
                   level="H" 
                   aria-label="Student ID verification QR code"
