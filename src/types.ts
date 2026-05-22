@@ -16,7 +16,7 @@ export interface UserProfile {
 
 export interface Student {
   id: string; // The generated student identification number / registration number
-  docId: string; // Firestore document ID
+  docId?: string; // Legacy field for local storage keys
   name: string;
   email: string;
   phone?: string;
@@ -31,16 +31,4 @@ export interface Student {
   createdAt: number;
   updatedAt: number;
   status: 'active' | 'suspended' | 'graduated';
-  userId?: string;
-}
-
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: 'create' | 'update' | 'delete' | 'list' | 'get' | 'write';
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-  }
 }

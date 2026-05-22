@@ -18,9 +18,13 @@ function AppContent() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email) {
+      setLoginError('Please enter your COOU email.');
+      return;
+    }
     try {
       setLoginError('');
-      await login();
+      await login(email);
     } catch (err: any) {
       setLoginError(err.message || 'An error occurred during login.');
     }
@@ -65,6 +69,15 @@ function AppContent() {
               </div>
             )}
             
+            <input
+              type="email"
+              placeholder="Enter COOU email address..."
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-university-green focus:border-transparent"
+              required
+            />
+
             <button
               type="submit"
               className="w-full flex items-center justify-center gap-2 bg-university-green hover:bg-university-green/90 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-100"

@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { Student } from '../types';
-import { db } from '../firebase';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { X, CheckCircle2, AlertTriangle, ShieldCheck, User, Building, Calendar, IdCard, Smartphone, RefreshCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -10,6 +8,11 @@ import { cn } from '../lib/utils';
 interface ScannerProps {
   onClose: () => void;
 }
+
+const getLocalStudents = (): Student[] => {
+  const data = localStorage.getItem('students');
+  return data ? JSON.parse(data) : [];
+};
 
 export function Scanner({ onClose }: ScannerProps) {
   const [verifying, setVerifying] = useState(false);
@@ -36,22 +39,11 @@ export function Scanner({ onClose }: ScannerProps) {
         setVerifying(true);
         setError(null);
         
-        let foundStudent: Student | null = null;
-        
-        // Try direct docId first
-        const docRef = doc(db, 'students', studentDocId);
-        const docSnap = await getDoc(docRef);
-        
-        if (docSnap.exists()) {
-          foundStudent = { ...docSnap.data(), docId: docSnap.id } as Student;
-        } else {
-          // If not found, try by registration ID `id`
-          const q = query(collection(db, 'students'), where('id', '==', studentDocId));
-          const querySnap = await getDocs(q);
-          if (!querySnap.empty) {
-            foundStudent = { ...querySnap.docs[0].data(), docId: querySnap.docs[0].id } as Student;
-          }
-        }
+        // Simulate network delay
+        await new Promise(r => setTimeout(r, 800));
+
+        const students = getLocalStudents();
+        const foundStudent = students.find(s => s.docId === studentDocId || s.id === studentDocId);
         
         if (foundStudent) {
           setResult(foundStudent);

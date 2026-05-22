@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useAuth, handleFirestoreError, OperationType } from '../AuthContext';
+import { useAuth } from '../AuthContext';
 import { Student } from '../types';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -22,8 +22,15 @@ import {
 } from 'lucide-react';
 import { cn, calculateLevel, compressImage, generateStudentId } from '../lib/utils';
 import { DEPARTMENTS } from '../constants';
-import { db } from '../firebase';
-import { collection, query, where, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
+
+const getLocalStudents = (): Student[] => {
+  const data = localStorage.getItem('students');
+  return data ? JSON.parse(data) : [];
+};
+
+const saveLocalStudents = (students: Student[]) => {
+  localStorage.setItem('students', JSON.stringify(students));
+};
 
 export function StudentPortal() {
   const idCardRef = useRef<HTMLDivElement>(null);
@@ -50,37 +57,25 @@ export function StudentPortal() {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
 
   useEffect(() => {
-    if (!user) return;
-    fetchStudentRecord();
-  }, [user]);
+    if (!user?.email) return;
 
-  const fetchStudentRecord = async () => {
-    setLoading(true);
-    try {
-      const q = query(collection(db, 'students'), where('userId', '==', user?.uid));
-      const snap = await getDocs(q);
-      
-      if (!snap.empty) {
-        const studentData = { ...snap.docs[0].data(), docId: snap.docs[0].id } as Student;
-        setStudent(studentData);
-        localStorage.setItem(`id_card_${user?.uid}`, JSON.stringify(studentData));
-        setOfflineMode(false);
+    // First try local storage for offline support
+    const cached = localStorage.getItem(`id_card_${user.uid}`);
+    if (cached) {
+      setStudent(JSON.parse(cached));
+      setLoading(false);
+    } else {
+      const students = getLocalStudents();
+      const userStudent = students.find(s => s.email === user.email);
+      if (userStudent) {
+        setStudent(userStudent);
+        localStorage.setItem(`id_card_${user.uid}`, JSON.stringify(userStudent));
       } else {
         setStudent(null);
       }
-    } catch (error) {
-       // fallback to local storage if offline
-       const cached = localStorage.getItem(`id_card_${user?.uid}`);
-       if (cached) {
-         setStudent(JSON.parse(cached));
-         setOfflineMode(true);
-       } else {
-         handleFirestoreError(error, OperationType.GET, 'students');
-       }
-    } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
   const handleDownload = async () => {
     if (!idCardRef.current) return;
@@ -113,18 +108,16 @@ export function StudentPortal() {
     }
   };
 
-  const handleDeleteRegistration = async () => {
+  const handleDeleteRegistration = () => {
     if (!user || !student) return;
     if (isConfirmingDelete) {
-      try {
-        await deleteDoc(doc(db, 'students', student.docId!));
-        localStorage.removeItem(`id_card_${user.uid}`);
-        setStudent(null);
-        setIsEnrolling(true);
-        setIsConfirmingDelete(false);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, `students/${student.docId}`);
-      }
+      const currentStudents = getLocalStudents();
+      const remain = currentStudents.filter(s => s.docId !== student.docId);
+      saveLocalStudents(remain);
+      localStorage.removeItem(`id_card_${user.uid}`);
+      setStudent(null);
+      setIsEnrolling(true);
+      setIsConfirmingDelete(false);
     } else {
       setIsConfirmingDelete(true);
       setTimeout(() => setIsConfirmingDelete(false), 3000);
@@ -133,12 +126,13 @@ export function StudentPortal() {
 
   const handleEnrollment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !user?.email || !enrollData.name || !enrollData.passportURL || !enrollData.registrationNumber) {
+    if (!user?.email || !enrollData.name || !enrollData.passportURL || !enrollData.registrationNumber) {
        alert("Please complete all compulsory fields including Registration Number and upload a verified photograph.");
        return;
     }
     const studentId = enrollData.registrationNumber;
     try {
+      const currentStudents = getLocalStudents();
       const docId = Date.now().toString();
       const newStudent: Student = {
         name: enrollData.name,
@@ -154,19 +148,20 @@ export function StudentPortal() {
         passportURL: enrollData.passportURL,
         id: studentId,
         docId: docId,
-        userId: user.uid,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         status: 'active'
       };
       
-      await setDoc(doc(db, 'students', docId), newStudent);
+      currentStudents.unshift(newStudent);
+      saveLocalStudents(currentStudents);
       
       localStorage.setItem(`id_card_${user.uid}`, JSON.stringify(newStudent));
       setStudent(newStudent);
       setIsEnrolling(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'students');
+      console.error("Error self-enrolling", error);
+      alert("Failed to enroll. Contact administration.");
     }
   };
 

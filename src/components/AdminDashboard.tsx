@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Student } from '../types';
 import { generateStudentId, cn, calculateLevel, compressImage } from '../lib/utils';
 import { DEPARTMENTS } from '../constants';
-import { useAuth, handleFirestoreError, OperationType } from '../AuthContext';
+import { useAuth } from '../AuthContext';
 import { 
   Search, 
   UserPlus, 
@@ -15,8 +15,15 @@ import {
   LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { db } from '../firebase';
-import { collection, doc, getDocs, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+
+const getLocalStudents = (): Student[] => {
+  const data = localStorage.getItem('students');
+  return data ? JSON.parse(data) : [];
+};
+
+const saveLocalStudents = (students: Student[]) => {
+  localStorage.setItem('students', JSON.stringify(students));
+};
 
 export function AdminDashboard() {
   const { logout } = useAuth();
@@ -45,28 +52,16 @@ export function AdminDashboard() {
   });
 
   useEffect(() => {
-    fetchStudents();
+    // Load from local storage on mount
+    setStudents(getLocalStudents());
+    setLoading(false);
   }, []);
-
-  const fetchStudents = async () => {
-    try {
-      const snap = await getDocs(collection(db, 'students'));
-      const studentData: Student[] = [];
-      snap.forEach(doc => studentData.push({ ...doc.data(), docId: doc.id } as Student));
-      setStudents(studentData);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'students');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       let currentStudents = [...students];
       if (editingStudent) {
-        const studentRef = doc(db, 'students', editingStudent.docId!);
         const index = currentStudents.findIndex(s => s.docId === editingStudent.docId);
         const updatedData = {
           ...currentStudents[index],
@@ -75,7 +70,6 @@ export function AdminDashboard() {
           level: calculateLevel(formData.admissionYear),
           updatedAt: Date.now()
         };
-        await updateDoc(studentRef, updatedData);
 
         if (index !== -1) {
           currentStudents[index] = updatedData;
@@ -91,11 +85,11 @@ export function AdminDashboard() {
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
-        await setDoc(doc(db, 'students', docId), newStudent);
         currentStudents.unshift(newStudent);
       }
       
       setStudents(currentStudents);
+      saveLocalStudents(currentStudents);
 
       setIsModalOpen(false);
       setEditingStudent(null);
@@ -115,11 +109,7 @@ export function AdminDashboard() {
         religion: 'Christianity'
       });
     } catch (error) {
-      if (editingStudent) {
-        handleFirestoreError(error, OperationType.UPDATE, `students/${editingStudent.docId}`);
-      } else {
-        handleFirestoreError(error, OperationType.CREATE, 'students');
-      }
+      console.error("Error saving student:", error);
     }
   };
 
@@ -128,11 +118,12 @@ export function AdminDashboard() {
   const handleDelete = async (docId: string) => {
     if (deletingId === docId) {
       try {
-        await deleteDoc(doc(db, 'students', docId));
-        setStudents(students.filter(s => s.docId !== docId));
+        const updatedStudents = students.filter(s => s.docId !== docId);
+        setStudents(updatedStudents);
+        saveLocalStudents(updatedStudents);
         setDeletingId(null);
       } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, `students/${docId}`);
+        console.error("Error deleting student:", error);
       }
     } else {
       setDeletingId(docId);

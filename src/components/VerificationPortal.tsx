@@ -2,9 +2,6 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Student } from '../types';
 import { motion } from 'motion/react';
-import { db } from '../firebase';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../AuthContext';
 import { 
   CheckCircle2, 
   XCircle, 
@@ -17,42 +14,23 @@ import {
 } from 'lucide-react';
 import { UNIVERSITY_NAME } from '../constants';
 
+const getLocalStudents = (): Student[] => {
+  const data = localStorage.getItem('students');
+  return data ? JSON.parse(data) : [];
+};
+
 export function VerificationPortal() {
   const { studentId } = useParams<{ studentId: string }>();
   const [student, setStudent] = useState<Student | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function verify() {
-      if (!studentId) {
-        setLoading(false);
-        return;
-      }
-      try {
-        // Try direct doc ID first
-        const docRef = doc(db, 'students', studentId);
-        const docSnap = await getDoc(docRef);
-        
-        if (docSnap.exists()) {
-          setStudent({ ...docSnap.data(), docId: docSnap.id } as Student);
-        } else {
-          // If not found, try by registration ID `id`
-          const q = query(collection(db, 'students'), where('id', '==', studentId));
-          const querySnap = await getDocs(q);
-          if (!querySnap.empty) {
-            setStudent({ ...querySnap.docs[0].data(), docId: querySnap.docs[0].id } as Student);
-          }
-        }
-      } catch (error) {
-        console.error("Verification failed to fetch:", error);
-      } finally {
-        setLoading(false);
-      }
-    }
-    
     // Simulate a secure registry lookup feel by adding a slight delay, but fetch real data
     const timer = setTimeout(() => {
-      verify();
+      const students = getLocalStudents();
+      const found = students.find(s => s.docId === studentId || s.id === studentId);
+      setStudent(found || null);
+      setLoading(false);
     }, 1500);
     return () => clearTimeout(timer);
   }, [studentId]);
